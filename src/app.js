@@ -1,0 +1,79 @@
+const path = require('path')
+const http = require('http')
+const express = require('express')
+const socketio = require('socket.io')
+const Filter = require('bad-words')
+const { generateMessage, generateLocationMessage } = require('./utils/messages')
+const {addUsers,removeUser,getUser,getUsersInRoom} = require('./utils/users')
+
+const app = express()
+const server = http.createServer(app)
+const io = socketio(server)
+
+const publicDirectoryPath = path.join(__dirname, '../public')
+app.use(express.static(publicDirectoryPath))
+
+io.on('connection', (socket) => {
+    console.log('New websocket connection')
+
+    //Join the chatroom
+    socket.on('join', (options, callback) => {
+
+        const {error,user} =  addUsers({id:socket.id,...options})
+
+        if(error){
+            return callback(error)
+        }
+
+        socket.join(user.room)
+        socket.emit('message', generateMessage('Admin','Welcome!'))
+        socket.broadcast.to(user.room).emit('message', generateMessage('Admin',`${user.username} has joined!`))
+        
+
+        //List of users in the room
+        io.to(user.room).emit('roomData',{
+            room: user.room,
+            users: getUsersInRoom(user.room)
+        })
+
+        callback()
+    })
+
+    //Send messages
+    socket.on('sendMessage', (message, callback) => {
+
+        const user = getUser(socket.id)
+
+        const filter = new Filter()
+        if (filter.isProfane(message)) {
+            return callback('Profinity is not allowed!')
+        }
+        //io.emit('message', generateMessage(message))
+        io.to(user.room).emit('message', generateMessage(user.username,message))
+        callback()
+    })
+
+    //Send location
+    socket.on('sendLocation', (coords, callback) => {
+        const user = getUser(socket.id)
+
+        io.to(user.room).emit('locationMessage', generateLocationMessage(user.username,coords))
+        callback()
+    })
+
+    //Disconnet connection
+    socket.on('disconnect', () => {
+        const user = removeUser(socket.id)
+
+        if(user){
+            io.to(user.room).emit('message', generateMessage('Admin',`${user.username} has left`))
+            //List of users in the room
+        io.to(user.room).emit('roomData',{
+            room: user.room,
+            users: getUsersInRoom(user.room)
+        })
+
+        }       
+    })
+})
+module.exports = server
